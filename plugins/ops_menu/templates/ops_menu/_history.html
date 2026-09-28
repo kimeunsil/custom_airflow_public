@@ -1,0 +1,21 @@
+<h4 style="margin-top:32px">최근 작업 이력</h4>
+<div class="table-responsive">
+<table class="table table-condensed table-striped" style="font-size:12px">
+  <thead><tr><th>시각(UTC)</th><th>사용자</th><th>작업</th><th>내용</th></tr></thead>
+  <tbody>
+  {% for h in history %}
+    <tr>
+      <td>{{ h.at }}</td><td>{{ h.user }}</td><td>{{ h.action }}</td>
+      <td>
+        {% if h.dag_id %}<code>{{ h.dag_id }}</code>{% endif %}
+        {% if h.window %}window {{ h.window }}{% if h.exclude_tag %}, exclude tag <code>{{ h.exclude_tag }}</code>{% endif %}
+          — {{ h.dags | length }}개{% endif %}
+        {% if h.command %}<br><small>{{ h.command | join(' ') }}</small>{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">이력이 없습니다</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>

@@ -1,0 +1,45 @@
+# 메타 DB(Postgres) + Celery 브로커(Redis)
+# 관리형 서비스(Cloud SQL, Memorystore, RDS, ElastiCache 등)를 쓰는 환경에서는 이 파일을 빼고
+# .env 에 AIRFLOW__DATABASE__SQL_ALCHEMY_CONN / RESULT_BACKEND / BROKER_URL 을 지정합니다.
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+    restart: unless-stopped
+
+  # Airflow 서비스는 airflow-init 을 기다리고, airflow-init 은 DB/브로커가 준비되면 시작
+  airflow-init:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-db:
+  redis-data:

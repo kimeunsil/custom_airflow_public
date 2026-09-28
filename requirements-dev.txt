@@ -1,0 +1,7 @@
+# 로컬 테스트용 (운영 컨테이너에는 공식 이미지에 포함된 패키지만 사용)
+# pip install -r requirements-dev.txt -c https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt
+apache-airflow==2.10.5
+apache-airflow-providers-google
+apache-airflow-providers-slack
+pytest
+ruff

@@ -1,0 +1,127 @@
+# Airflow 2.x · CeleryExecutor 서비스 (공식 apache/airflow 이미지 사용)
+#
+# 메타 DB·브로커는 docker-compose.infra.yml 에 분리되어 있습니다.
+#   - 로컬/단일 서버 : COMPOSE_FILE=docker-compose.yml:docker-compose.infra.yml  (.env 기본값)
+#   - 관리형 DB 사용 : COMPOSE_FILE=docker-compose.yml  + .env 에 접속 정보 지정
+#
+#   make init          # .env 생성 + 키 발급
+#   make up            # 기동 (최초 1회 DB 마이그레이션·관리자 생성 포함)
+#   make scale n=3     # worker 수 조정
+#   docker compose --profile flower up -d flower   # Celery 모니터링(선택)
+
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.10.5-python3.11}
+  env_file: .env
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}}
+    AIRFLOW__CELERY__RESULT_BACKEND: ${AIRFLOW__CELERY__RESULT_BACKEND:-db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}}
+    AIRFLOW__CELERY__BROKER_URL: ${AIRFLOW__CELERY__BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+    AIRFLOW__CELERY__WORKER_CONCURRENCY: ${AIRFLOW_WORKER_CONCURRENCY:-16}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: ${AIRFLOW_TIMEZONE:-Asia/Seoul}
+    AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: ${AIRFLOW_TIMEZONE:-Asia/Seoul}
+    AIRFLOW__WEBSERVER__BASE_URL: ${AIRFLOW_BASE_URL:-http://localhost:8080}   # 알림의 로그 링크에 사용
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED_AT_CREATION:-True}
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "60"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./plugins:/opt/airflow/plugins
+    - ./logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  restart: unless-stopped
+
+services:
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"   # 종료 시 실행 중 태스크를 정상 마무리(warm shutdown)
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # DB 마이그레이션 + 관리자 계정 생성 (재실행해도 안전)
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/logs
+        # 외부(관리형) DB 는 기동 순서를 보장할 수 없으므로 접속될 때까지 대기
+        for i in $$(seq 1 30); do airflow db check && break; echo "DB 대기 중 ($$i)"; sleep 5; done
+        airflow db migrate
+        airflow users list | grep -q " $${AIRFLOW_ADMIN_USERNAME} " || \
+          airflow users create --role Admin \
+            --username "$${AIRFLOW_ADMIN_USERNAME}" --password "$${AIRFLOW_ADMIN_PASSWORD}" \
+            --email "$${AIRFLOW_ADMIN_EMAIL}" --firstname Admin --lastname User
+    restart: "no"
+
+  flower:
+    <<: *airflow-common
+    command: celery flower
+    profiles: [flower]
+    ports:
+      - "5555:5555"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+

@@ -1,0 +1,57 @@
+{% extends base_template %}
+{% block title %}Backfill{% endblock %}
+{% block content %}
+<h2>Backfill / Clear</h2>
+<p class="text-muted">지정 기간의 DAG 실행을 다시 만듭니다. 작업은 웹서버와 분리된 프로세스로 실행되며 아래에 로그가 표시됩니다.</p>
+
+<form id="bf-form" class="form-inline" style="margin-bottom:16px">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="form-group"><label>DAG ID&nbsp;</label>
+    <input class="form-control" name="dag_id" required style="width:280px"></div>
+  <div class="form-group"><label>&nbsp;시작&nbsp;</label>
+    <input class="form-control" type="date" name="start_date" required></div>
+  <div class="form-group"><label>&nbsp;종료&nbsp;</label>
+    <input class="form-control" type="date" name="end_date" required></div>
+  <div class="form-group"><label>&nbsp;모드&nbsp;</label>
+    <select class="form-control" name="mode">
+      <option value="backfill">backfill (없는 실행 생성)</option>
+      <option value="clear">clear (기존 실행 재수행)</option>
+    </select></div>
+  <div class="checkbox"><label>&nbsp;<input type="checkbox" name="reset_dagruns" value="true"> 기존 dag run 리셋</label></div>
+  <div class="checkbox"><label>&nbsp;<input type="checkbox" name="only_failed" value="true"> 실패 태스크만</label></div>
+  &nbsp;<button class="btn btn-primary" type="submit">실행</button>
+</form>
+
+<div id="bf-status" class="text-muted"></div>
+<pre id="bf-log" style="max-height:480px;overflow:auto;background:#1e1e1e;color:#ddd;display:none"></pre>
+
+{% include "ops_menu/_history.html" %}
+
+<script>
+(function () {
+  const form = document.getElementById('bf-form');
+  const logEl = document.getElementById('bf-log');
+  const statusEl = document.getElementById('bf-status');
+  let timer = null;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const verb = fd.get('mode') === 'clear' ? 'clear' : 'backfill';
+    if (!confirm(`${fd.get('dag_id')} 를 ${fd.get('start_date')} ~ ${fd.get('end_date')} 기간 ${verb} 합니다.`)) return;
+    const res = await fetch('{{ url_for("BackfillView.run") }}', { method: 'POST', body: fd });
+    const body = await res.json();
+    if (!body.ok) { statusEl.textContent = '오류: ' + body.error; return; }
+    statusEl.textContent = '실행 중: ' + body.command;
+    logEl.style.display = 'block';
+    clearInterval(timer);
+    const url = '{{ url_for("BackfillView.log", job_id="__ID__") }}'.replace('__ID__', body.job_id);
+    const poll = async () => {
+      logEl.textContent = await (await fetch(url)).text();
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+    poll(); timer = setInterval(poll, 3000);
+  });
+})();
+</script>
+{% endblock %}

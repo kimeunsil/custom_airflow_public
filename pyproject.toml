@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::PendingDeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["dags", "plugins", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["common", "maintenance", "ops_menu"]

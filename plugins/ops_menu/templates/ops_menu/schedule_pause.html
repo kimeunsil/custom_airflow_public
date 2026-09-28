@@ -1,0 +1,72 @@
+{% extends base_template %}
+{% block title %}Schedule Pause{% endblock %}
+{% block content %}
+<h2>Schedule Pause</h2>
+<p class="text-muted">
+  오늘({{ timezone }}) 지정한 시간대에 다음 실행이 예정된 DAG 를 한꺼번에 일시정지/재개합니다.
+  원천 데이터 적재가 늦어지거나 DW 점검이 있을 때 연쇄 실패를 막는 용도입니다.
+  반드시 <b>미리보기</b>로 대상을 확인한 뒤 적용하세요.
+</p>
+<div class="alert alert-warning" style="padding:8px 12px">
+  재개(Unpause)는 <b>이른 시간대부터 순서대로</b> 진행하고, 이전 시간대 DAG 가 모두 끝난 것을 확인한 뒤 다음 시간대를 재개하세요.
+  한꺼번에 재개하면 선후행 관계가 있는 마트가 덜 적재된 데이터로 집계될 수 있습니다.
+</div>
+
+<div style="margin-bottom:10px">
+  <span class="text-muted">빠른 선택:</span>
+  {% for s, e, label in [(0,7,'00~07'),(7,8,'07~08'),(8,9,'08~09'),(9,10,'09~10'),(10,11,'10~11'),(11,12,'11~12'),(12,13,'12~13'),(0,24,'오늘 전체')] %}
+    <button type="button" class="btn btn-xs btn-default sp-preset" data-start="{{ s }}" data-end="{{ e }}">{{ label }}</button>
+  {% endfor %}
+</div>
+
+<form id="sp-form" class="form-inline" style="margin-bottom:16px">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="form-group"><label>시간대&nbsp;</label>
+    <input class="form-control" type="number" name="start_hour" min="0" max="23" value="0" style="width:80px"> 시 ~
+    <input class="form-control" type="number" name="end_hour" min="1" max="24" value="7" style="width:80px"> 시</div>
+  <div class="form-group"><label>&nbsp;제외 태그&nbsp;</label>
+    <input class="form-control" name="exclude_tag" placeholder="예: realtime" style="width:160px"></div>
+  &nbsp;<button class="btn btn-default" type="button" data-act="preview">미리보기</button>
+  <button class="btn btn-warning" type="button" data-act="pause">일시정지</button>
+  <button class="btn btn-success" type="button" data-act="unpause">재개</button>
+</form>
+
+<div id="sp-result"></div>
+
+{% include "ops_menu/_history.html" %}
+
+<script>
+(function () {
+  const form = document.getElementById('sp-form');
+  const out = document.getElementById('sp-result');
+  form.parentNode.querySelectorAll('.sp-preset').forEach((b) => b.addEventListener('click', () => {
+    form.start_hour.value = b.dataset.start;
+    form.end_hour.value = b.dataset.end;
+    form.querySelector('button[data-act="preview"]').click();
+  }));
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  form.querySelectorAll('button[data-act]').forEach((btn) => btn.addEventListener('click', async () => {
+    const act = btn.dataset.act;
+    const fd = new FormData(form);
+    let url = '{{ url_for("SchedulePauseView.preview") }}';
+    if (act !== 'preview') {
+      if (!confirm(`${fd.get('start_hour')}~${fd.get('end_hour')}시 대상 DAG 를 ${act === 'pause' ? '일시정지' : '재개'} 합니다.`)) return;
+      fd.append('action', act);
+      url = '{{ url_for("SchedulePauseView.apply") }}';
+    }
+    const body = await (await fetch(url, { method: 'POST', body: fd })).json();
+    if (!body.ok) { out.innerHTML = '<div class="alert alert-danger">' + esc(body.error) + '</div>'; return; }
+    if (act === 'preview') {
+      const rows = body.dags.map((d) =>
+        `<tr><td>${esc(d.dag_id)}</td><td>${d.is_paused ? 'paused' : 'active'}</td><td>${esc(d.next_run)}</td></tr>`).join('');
+      out.innerHTML = `<p>대상 ${body.dags.length}개 (UTC ${esc(body.window_utc[0])} ~ ${esc(body.window_utc[1])})</p>` +
+        `<table class="table table-condensed"><tr><th>DAG</th><th>상태</th><th>다음 실행(UTC)</th></tr>${rows}</table>`;
+    } else {
+      out.innerHTML = `<div class="alert alert-info">${esc(body.action)}: ${body.changed.length}개 변경<br>` +
+        body.changed.map(esc).join(', ') + '</div>';
+    }
+  }));
+})();
+</script>
+{% endblock %}
